@@ -2,6 +2,8 @@ package godotenv
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -19,8 +21,25 @@ func parseBytes(src []byte, out map[string]string) error {
 	src = bytes.Replace(src, []byte("\r\n"), []byte("\n"), -1)
 	cutset := src
 	for {
-		//cutset =
+		cutset = getStatementStart(cutset)
+		if cutset == nil {
+			break
+		}
+
+		key, left, err := locateKeyName(cutset)
+		if err != nil {
+			return err
+		}
+
+		value, left, err := extractVarValue(left, out)
+		if err != nil {
+			return err
+		}
+
+		out[key] = value
+		cutset = left
 	}
+	return nil
 }
 
 func getStatementStart(src []byte) []byte {
@@ -43,7 +62,106 @@ func getStatementStart(src []byte) []byte {
 }
 
 func locateKeyName(src []byte) (key string, cutset []byte, err error) {
+	src = bytes.TrimLeftFunc(src, isSpace)
+	if bytes.HasPrefix(src, []byte(exportPrefix)) {
+		trimmd := bytes.TrimPrefix(src, []byte(exportPrefix))
+		if bytes.IndexFunc(trimmd, isSpace) == 0 {
+			src = bytes.TrimLeftFunc(trimmd, isSpace)
+		}
+	}
 
+	offset := 0
+loop:
+	for i, char := range src {
+		rchar := rune(char)
+		if isSpace(rchar) {
+			continue
+		}
+
+		switch char {
+		case '=', ':':
+			key = string(src[0:i])
+			offset = i + 1
+			break loop
+		case '_':
+		default:
+			if unicode.IsLetter(rchar) || unicode.IsNumber(rchar) || rchar == '.' {
+				continue
+			}
+
+			return "", nil, fmt.Errorf(
+				`unexpected character %q in variable name near %q`,
+				string(char), string(src))
+		}
+	}
+
+	if len(src) == 0 {
+		return "", nil, errors.New("zero length string")
+	}
+
+	key = strings.TrimRightFunc(key, unicode.IsSpace)
+	cutset = bytes.TrimLeftFunc(src[offset:], isSpace)
+	return key, cutset, nil
+}
+
+func extractVarValue(src []byte, vars map[string]string) (value string, reset []byte, err error) {
+	quote, hasPrefix := hasQuotePrefix(src)
+	if !hasPrefix {
+		endOfLine := bytes.IndexFunc(src, isLineEnd)
+
+		if endOfLine == -1 {
+			endOfLine = len(src)
+
+			if endOfLine == 0 {
+				return "", nil, nil
+			}
+		}
+
+		line := []rune(string(src[0:endOfLine]))
+
+		endOfVar := len(line)
+		if endOfVar == 0 {
+			return "", src[endOfLine:], nil
+		}
+
+		for i := endOfVar - 1; i >= 0; i-- {
+			if line[i] == charComment && i > 0 {
+				if isSpace(line[i-1]) {
+					endOfVar = i
+					break
+				}
+			}
+		}
+
+		trimmd := strings.TrimFunc(string(line[0:endOfLine]), isSpace)
+
+		return expandVariables(trimmd, vars), src[endOfLine:], nil
+	}
+
+	for i := 1; i < len(src); i++ {
+		if char := src[i]; char != quote {
+			continue
+		}
+
+		if prevChar := src[i-1]; prevChar == '\\' {
+			continue
+		}
+
+		trimFunc := isCharFunc(rune(quote))
+		value = string(bytes.TrimLeftFunc(bytes.TrimRightFunc(src[0:i], trimFunc), trimFunc))
+		if quote == prefixDoubleQuote {
+			value = expandVariables(expandEspaces(value), vars)
+		}
+
+		return value, src[i+1:], nil
+	}
+
+	valEndIndex := bytes.IndexFunc(src, isCharFunc('\n'))
+	if valEndIndex == -1 {
+		valEndIndex = len(src)
+	}
+
+	return "", nil, fmt.Errorf("unterminated quoted valu %s", src[:valEndIndex])
 }
 
 func expandEspaces(str string) string {
