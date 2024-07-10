@@ -133,7 +133,7 @@ func extractVarValue(src []byte, vars map[string]string) (value string, reset []
 			}
 		}
 
-		trimmd := strings.TrimFunc(string(line[0:endOfLine]), isSpace)
+		trimmd := strings.TrimFunc(string(line[0:endOfVar]), isSpace)
 
 		return expandVariables(trimmd, vars), src[endOfLine:], nil
 	}
