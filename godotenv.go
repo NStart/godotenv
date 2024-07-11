@@ -67,6 +67,10 @@ func Read(filenames ...string) (envMap map[string]string, err error) {
 	return
 }
 
+func Unmarshal(str string) (envMap map[string]string, err error) {
+	return UnmarshalBytes([]byte(str))
+}
+
 func UnmarshalBytes(src []byte) (map[string]string, error) {
 	out := make(map[string]string)
 	err := parseBytes(src, out)
